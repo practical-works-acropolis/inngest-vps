@@ -150,6 +150,15 @@ INNGEST_EVENT_KEY=<from print-env>
 INNGEST_SIGNING_KEY=<from print-env>
 ```
 
+### Signed mode, not dev mode (HOMEINFRA-294)
+
+`INNGEST_DEV=1` is not a fix for a worker that "gets 401s". In dev mode the SDK skips signature checks, so a SERVE app's public route (`/inngest`, `/api/inngest`) accepts unsigned registration `PUT`s and, very likely, unsigned invocations from anyone. The server's own surfaces stay gated (see Ops). This hole is on the app side.
+
+- **Prefer Connect.** A Connect worker dials out to `/v0/connect` and has no inbound invoke route. Run it with `INNGEST_DEV=0` and the server's `INNGEST_SIGNING_KEY`. niche-fleet runs this way against this server (niche-fleet#250). The Connect gateway refuses a worker without the signing key in either mode.
+- **A SERVE app stays on `INNGEST_DEV=1` only until it moves.** Move it to Connect, or to `INNGEST_DEV=0` once an unsigned `PUT` to its route is shown to return 401 while the server's own sync still succeeds.
+- **Cut over one app at a time:** write the app's pause flags, set `INNGEST_DEV=0` with `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY`, and redeploy (Connect apps get a redeploy, never a `PUT`). Then check that the Apps page shows the same function count as before and that runs succeed, before you lift the pause.
+- **Rotation:** `scripts/rotate-inngest-keys.sh` changes the key on the server and on every worker it lists. A worker it misses is refused by the gateway, and in signed mode also rejects every invocation, so keep `WORKERS` complete.
+
 Add entries to `sync-apps.conf`:
 
 ```
