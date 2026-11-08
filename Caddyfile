@@ -28,6 +28,16 @@
 		expression `{env.INNGEST_SIGNING_KEY} != ""`
 	}
 
+	# Metrics-only bearer (HOMEINFRA-575): the status box's VictoriaMetrics scrapes /metrics
+	# with this, so it never holds the signing key (which can invoke functions). It opens
+	# exactly GET /metrics and nothing else. Same closed-when-unset shape as the operator bearer.
+	@metrics_bearer {
+		method GET
+		path /metrics
+		header Authorization "Bearer {$INNGEST_METRICS_BEARER:unset-inngest-metrics-bearer-denies-all}"
+		expression `{env.INNGEST_METRICS_BEARER} != ""`
+	}
+
 	# /mcp (v1.40+) hands out MCP sessions with no credentials, and its tools include
 	# invoke_function and cancel_run (FACT-1675). The factory's .mcp.json already sends
 	# `Authorization: Bearer ${INNGEST_API_KEY}`; the server never checked it, so Caddy does.
@@ -59,14 +69,18 @@
 	# Everything else is operator-only: the dashboard SPA and its GraphQL API (/v0/gql,
 	# which exposes invokeFunction, rerun, cancelRun, create/update/deleteApp), the
 	# playground at /v0, the unauthenticated POST /invoke/{slug}, /debug (pprof) and
-	# /metrics. Machines pass with the operator bearer; a human gets one basic-auth
-	# prompt. Unset INNGEST_DASHBOARD_USER/HASH fall back to a user nobody has and a
+	# /metrics. Machines pass with the operator bearer (and GET /metrics alone with the
+	# metrics bearer above); a human gets one basic-auth prompt. Unset INNGEST_DASHBOARD_USER/HASH fall back to a user nobody has and a
 	# hash of a discarded random password: closed, not open. The credential is stripped
 	# before proxying so it never reaches the inngest logs.
 	# `route` keeps this order literal (Caddy would otherwise run basic_auth and
 	# request_header before the bearer check).
 	handle {
 		route {
+			handle @metrics_bearer {
+				request_header -Authorization
+				reverse_proxy inngest:8288
+			}
 			handle @operator_bearer {
 				request_header -Authorization
 				reverse_proxy inngest:8288

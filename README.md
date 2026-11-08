@@ -211,9 +211,19 @@ Inngest serves its dashboard and its GraphQL API (`/v0/gql`) with no authenticat
 |---|---|
 | `/e/*`, `/fn/*`, `/v0/connect`, `/v0/connect/*`, `/v0/runs/*`, `/v0/telemetry`, `/v1/*`, `/api/v2/*`, `/v2/*`, `/health`, `/dev`, `/dev/*` | Anyone. The server authenticates these itself. |
 | `/mcp`, `/mcp/*` | `Authorization: Bearer $INNGEST_MCP_BEARER` only (see above) |
+| `GET /metrics` (exact path) | Also `Authorization: Bearer $INNGEST_METRICS_BEARER`, a scrape-only credential (below). The operator bearer and basic auth still work. |
 | Everything else: `/`, every dashboard route and asset, `/v0`, `/v0/gql`, `/invoke/*`, `/debug/*`, `/metrics` | `Authorization: Bearer $INNGEST_SIGNING_KEY` (machines) **or** basic auth `INNGEST_DASHBOARD_USER` / `INNGEST_DASHBOARD_HASH` (humans) |
 
 Caddy strips the credential before proxying the operator paths, so it never reaches the inngest logs. If a value is unset, its gate is **closed**, not open.
+
+**Metrics scrape credential (HOMEINFRA-575).** The status box's VictoriaMetrics (eko-ventures/monitoring-plane, `inngest` scrape job) reads `inngest_queue_depth` from `/metrics`. It sends `INNGEST_METRICS_BEARER`, never the signing key, because the signing key can invoke functions. That bearer opens `GET /metrics` and nothing else: not `/v0/gql`, `/invoke`, `/debug`, `/mcp` or the dashboard. The value lives in Infisical as `INNGEST_METRICS_BEARER` (home-edge / prod / `/ci/`), where monitoring-plane's deploy reads it, and in this VPS's `.env` under the same name. To set or rotate it:
+
+```bash
+openssl rand -hex 32            # store as INNGEST_METRICS_BEARER in Infisical
+# in .env on the VPS:  INNGEST_METRICS_BEARER=<same value>
+sudo docker compose up -d --force-recreate caddy
+# then redeploy the evidence plane so its scrape file carries the new value
+```
 
 **Why the SDK list is complete.** It comes from the inngest/inngest **v1.46.0** router (`pkg/devserver/devserver.go` mounts, `pkg/api/api.go`, `pkg/devserver/api.go`, `pkg/coreapi/coreapi.go`, `pkg/api/apiv1/apiv1.go`, `pkg/connect/service.go`):
 

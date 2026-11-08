@@ -16,6 +16,9 @@ services:
       # `Authorization: Bearer <signing key>`. Same value the inngest service gets; a key
       # rotation must recreate caddy too. Unset = /v0/gql reachable only by basic auth.
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-}
+      # Read-only scrape credential for GET /metrics alone (HOMEINFRA-575): the evidence plane's
+      # VictoriaMetrics sends `Authorization: Bearer <this>`. Unset = only the operator gates.
+      INNGEST_METRICS_BEARER: ${INNGEST_METRICS_BEARER:-}
       # Human login for the dashboard (basic auth, HOMEINFRA-195). HASH is a bcrypt hash from
       # `caddy hash-password`, single-quoted in .env so compose does not interpolate its `$`.
       # Either unset = dashboard closed.

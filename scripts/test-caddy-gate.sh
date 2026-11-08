@@ -5,7 +5,8 @@
 # Runs the real Caddyfile in caddy:2-alpine against a stub upstream named `inngest`
 # (python, answers on 8288 and 8289 with "<port> <path> auth=<present|absent>"), then
 # curls a matrix: operator surfaces (/, /v0/gql, /invoke, /debug, /metrics, /mcp) must
-# refuse anonymous callers; SDK/worker routes must reach the upstream untouched.
+# refuse anonymous callers; SDK/worker routes must reach the upstream untouched; the
+# metrics-only bearer (HOMEINFRA-575) opens GET /metrics and nothing else.
 # Runs twice: with credentials set, and with them unset (must be closed, not open).
 #
 # Needs only docker + curl. Credentials are random per run and never printed.
@@ -37,18 +38,21 @@ for bin in docker curl openssl; do command -v "$bin" >/dev/null || { echo "missi
 # Test-only credentials (random, discarded with $TMP).
 export INNGEST_SIGNING_KEY; INNGEST_SIGNING_KEY="$(openssl rand -hex 32)"
 export INNGEST_MCP_BEARER; INNGEST_MCP_BEARER="$(openssl rand -hex 24)"
+export INNGEST_METRICS_BEARER; INNGEST_METRICS_BEARER="$(openssl rand -hex 24)"
 export INNGEST_DASHBOARD_USER="operator"
 DASH_PASS="$(openssl rand -hex 16)"
 export INNGEST_DASHBOARD_HASH
 INNGEST_DASHBOARD_HASH="$(docker run --rm "$CADDY_IMAGE" caddy hash-password --plaintext "$DASH_PASS")"
 printf 'Authorization: Bearer %s\n' "$INNGEST_SIGNING_KEY" >"${TMP}/bearer.hdr"
 printf 'Authorization: Bearer %s\n' "$INNGEST_MCP_BEARER" >"${TMP}/mcp-bearer.hdr"
+printf 'Authorization: Bearer %s\n' "$INNGEST_METRICS_BEARER" >"${TMP}/metrics-bearer.hdr"
 printf 'Authorization: Bearer %s\n' "wrong-$(openssl rand -hex 8)" >"${TMP}/wrong-bearer.hdr"
 # The SDK form of the same key. The gate compares the raw hex, so callers strip the prefix
 # (factory inngest-runs.ts and verify-sweep, niche-fleet inngest-registration.ts).
 printf 'Authorization: Bearer signkey-prod-%s\n' "$INNGEST_SIGNING_KEY" >"${TMP}/prefixed-bearer.hdr"
 printf 'Authorization: Bearer %s\n' "unset-inngest-signing-key-denies-all" >"${TMP}/sentinel-bearer.hdr"
 printf 'Authorization: Bearer %s\n' "unset-inngest-mcp-bearer-denies-all" >"${TMP}/sentinel-mcp-bearer.hdr"
+printf 'Authorization: Bearer %s\n' "unset-inngest-metrics-bearer-denies-all" >"${TMP}/sentinel-metrics-bearer.hdr"
 printf 'user = "%s:%s"\n' "$INNGEST_DASHBOARD_USER" "$DASH_PASS" >"${TMP}/basic.curlrc"
 printf 'user = "%s:%s"\n' "$INNGEST_DASHBOARD_USER" "wrong" >"${TMP}/wrong-basic.curlrc"
 printf 'user = "%s:%s"\n' "unset-dashboard-user-denies-all" "x" >"${TMP}/sentinel-basic.curlrc"
@@ -171,7 +175,7 @@ ui_matrix() {
 }
 
 echo "== credentials SET =="
-start_caddy -e INNGEST_SIGNING_KEY -e INNGEST_MCP_BEARER -e INNGEST_DASHBOARD_USER -e INNGEST_DASHBOARD_HASH
+start_caddy -e INNGEST_SIGNING_KEY -e INNGEST_MCP_BEARER -e INNGEST_METRICS_BEARER -e INNGEST_DASHBOARD_USER -e INNGEST_DASHBOARD_HASH
 check 401 - "anonymous  POST /v0/gql query"                 "${GQL[@]}" "$B/v0/gql"
 check 401 - "anonymous  GET  /v0/gql/"                      "$B/v0/gql/"
 check 401 - "anonymous  GET  /v0/gql query"                --get --data-urlencode 'query={ apps { name } }' "$B/v0/gql"
@@ -192,6 +196,16 @@ check 401 - "anonymous  POST /invoke/fn (unauth invoke)"    -X POST "$B/invoke/f
 check 401 - "anonymous  GET  /debug/pprof/"                 "$B/debug/pprof/"
 check 401 - "anonymous  GET  /metrics"                      "$B/metrics"
 check 200 "8288 /metrics auth=absent" "signing-key bearer GET /metrics" -H @"${TMP}/bearer.hdr" "$B/metrics"
+# Metrics-only bearer (HOMEINFRA-575): GET /metrics and nothing else.
+check 200 "8288 /metrics auth=absent" "metrics bearer GET /metrics (credential stripped)" -H @"${TMP}/metrics-bearer.hdr" "$B/metrics"
+check 401 - "metrics bearer POST /metrics (GET only)"        -X POST -H @"${TMP}/metrics-bearer.hdr" "$B/metrics"
+check 401 - "metrics bearer GET /metrics/x (exact path)"    -H @"${TMP}/metrics-bearer.hdr" "$B/metrics/x"
+check 401 - "metrics bearer POST /v0/gql"                    "${GQL[@]}" -H @"${TMP}/metrics-bearer.hdr" "$B/v0/gql"
+check 401 - "metrics bearer GET / (dashboard)"               -H @"${TMP}/metrics-bearer.hdr" "$B/"
+check 401 - "metrics bearer POST /invoke/fn"                 -X POST -H @"${TMP}/metrics-bearer.hdr" "$B/invoke/fn"
+check 401 - "metrics bearer GET /debug/pprof/"               -H @"${TMP}/metrics-bearer.hdr" "$B/debug/pprof/"
+check 401 - "metrics bearer POST /mcp"                       -X POST -H @"${TMP}/metrics-bearer.hdr" "$B/mcp"
+check 401 - "public sentinel metrics bearer GET /metrics"    -H @"${TMP}/sentinel-metrics-bearer.hdr" "$B/metrics"
 check 401 - "anonymous  GET  /invoke/fn"                    "$B/invoke/fn"
 check 401 - "anonymous  GET  /debug/pprof/profile"          "$B/debug/pprof/profile?seconds=1"
 check 401 - "anonymous  GET  /v0/connectx (not a prefix)"   "$B/v0/connectx"
@@ -207,7 +221,10 @@ sdk_matrix
 ui_matrix
 
 echo "== credentials UNSET (must be closed) =="
-start_caddy -e INNGEST_SIGNING_KEY= -e INNGEST_MCP_BEARER= -e INNGEST_DASHBOARD_USER= -e INNGEST_DASHBOARD_HASH=
+start_caddy -e INNGEST_SIGNING_KEY= -e INNGEST_MCP_BEARER= -e INNGEST_METRICS_BEARER= -e INNGEST_DASHBOARD_USER= -e INNGEST_DASHBOARD_HASH=
+check 401 - "anonymous  GET  /metrics"                      "$B/metrics"
+check 401 - "public sentinel metrics bearer GET /metrics"   -H @"${TMP}/sentinel-metrics-bearer.hdr" "$B/metrics"
+check 401 - "'Bearer ' (empty) GET /metrics"                -H 'Authorization: Bearer ' "$B/metrics"
 check 401 - "anonymous  POST /v0/gql query"                 "${GQL[@]}" "$B/v0/gql"
 check 401 - "anonymous  GET  /v0/gql query"                --get --data-urlencode 'query={ apps { name } }' "$B/v0/gql"
 check 401 - "anonymous  GET  /v0/gql bare"                 "$B/v0/gql"
@@ -218,6 +235,13 @@ check 401 - "public sentinel bearer POST /mcp"              -X POST -H @"${TMP}/
 check 401 - "'Bearer ' (empty) POST /mcp"                   -X POST -H 'Authorization: Bearer ' "$B/mcp"
 sdk_matrix
 ui_matrix
+
+echo "== credentials ABSENT from the environment (sentinel defaults apply) =="
+# Not passed at all, so `{$VAR:default}` takes the public sentinel. The non-empty expression
+# is what keeps a caller who sends that sentinel out.
+start_caddy
+check 401 - "public sentinel metrics bearer GET /metrics"   -H @"${TMP}/sentinel-metrics-bearer.hdr" "$B/metrics"
+check 401 - "public sentinel bearer POST /v0/gql"           "${GQL[@]}" -H @"${TMP}/sentinel-bearer.hdr" "$B/v0/gql"
 
 echo "== docker compose passes a single-quoted bcrypt hash through literally =="
 # `compose config` prints a literal $ re-escaped as $$, so undo that before comparing.
