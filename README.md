@@ -71,7 +71,7 @@ Fly sync is deliberately OSS poll-based: `./scripts/sync-apps.sh --write-yaml` r
 Clean-clone verification:
 
 ```bash
-git clone https://github.com/PracticalWorks/inngest-vps.git && cd inngest-vps
+git clone https://github.com/practical-works-acropolis/inngest-vps.git && cd inngest-vps
 cp fly.toml.example fly.toml
 # configure .env, Supabase, Fly Redis, and sync-apps.conf
 ./scripts/install.sh --print-env
@@ -154,7 +154,7 @@ INNGEST_SIGNING_KEY=<from print-env>
 
 `INNGEST_DEV=1` is not a fix for a worker that "gets 401s". In dev mode the SDK skips signature checks, so a SERVE app's public route (`/inngest`, `/api/inngest`) accepts unsigned registration `PUT`s and, very likely, unsigned invocations from anyone. The server's own surfaces stay gated (see Ops). This hole is on the app side.
 
-- **Prefer Connect.** A Connect worker dials out to `/v0/connect` and has no inbound invoke route. Run it with `INNGEST_DEV=0` and the server's `INNGEST_SIGNING_KEY`. niche-fleet runs this way against this server (niche-fleet#250). The Connect gateway refuses a worker without the signing key in either mode.
+- **Prefer Connect.** A Connect worker dials out to `/v0/connect` and has no inbound invoke route. Run it with `INNGEST_DEV=0` and the server's `INNGEST_SIGNING_KEY`. newsroom (formerly niche-fleet) runs this way against this server (newsroom#250). The Connect gateway refuses a worker without the signing key in either mode.
 - **A SERVE app stays on `INNGEST_DEV=1` only until it moves.** Move it to Connect, or to `INNGEST_DEV=0` once an unsigned `PUT` to its route is shown to return 401 while the server's own sync still succeeds.
 - **Cut over one app at a time:** write the app's pause flags, set `INNGEST_DEV=0` with `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY`, and redeploy (Connect apps get a redeploy, never a `PUT`). Then check that the Apps page shows the same function count as before and that runs succeed, before you lift the pause.
 - **Rotation:** `scripts/rotate-inngest-keys.sh` changes the key on the server and on every worker it lists. A worker it misses is refused by the gateway, and in signed mode also rejects every invocation, so keep `WORKERS` complete.
@@ -225,7 +225,7 @@ Inngest serves its dashboard and its GraphQL API (`/v0/gql`) with no authenticat
 
 Caddy strips the credential before proxying the operator paths, so it never reaches the inngest logs. If a value is unset, its gate is **closed**, not open.
 
-**Metrics scrape credential (HOMEINFRA-575).** The status box's VictoriaMetrics (eko-ventures/monitoring-plane, `inngest` scrape job) reads `inngest_queue_depth` from `/metrics`. It sends `INNGEST_METRICS_BEARER`, never the signing key, because the signing key can invoke functions. That bearer opens `GET /metrics` and nothing else: not `/v0/gql`, `/invoke`, `/debug`, `/mcp` or the dashboard. The value lives in Infisical as `INNGEST_METRICS_BEARER` (home-edge / prod / `/ci/`), where monitoring-plane's deploy reads it, and in this VPS's `.env` under the same name. To set or rotate it:
+**Metrics scrape credential (HOMEINFRA-575).** The status box's VictoriaMetrics (practical-works-acropolis/monitoring-plane, `inngest` scrape job) reads `inngest_queue_depth` from `/metrics`. It sends `INNGEST_METRICS_BEARER`, never the signing key, because the signing key can invoke functions. That bearer opens `GET /metrics` and nothing else: not `/v0/gql`, `/invoke`, `/debug`, `/mcp` or the dashboard. The value lives in Infisical as `INNGEST_METRICS_BEARER` (home-edge / prod / `/ci/`), where monitoring-plane's deploy reads it, and in this VPS's `.env` under the same name. To set or rotate it:
 
 ```bash
 openssl rand -hex 32            # store as INNGEST_METRICS_BEARER in Infisical
@@ -275,7 +275,7 @@ Start or restart the tunnel: `sudo docker compose --profile dashboard-access up 
 **Deploy order.** Every `/v0/gql` caller must send the bearer **before** this gate deploys, or it starts getting `401`:
 
 1. factory `apps/mcp` `inngest-runs.ts` and `packages/ops` verify-sweep
-2. niche-fleet `inngest-registration.ts`
+2. newsroom `inngest-registration.ts`
 3. then this repo: add `INNGEST_DASHBOARD_USER` and `INNGEST_DASHBOARD_HASH` to the **local** `.env` of the checkout that deploys the box (`INNGEST_SIGNING_KEY` is already there), run `./scripts/install.sh <ip>`, and recreate `caddy`.
 
 `install.sh` copies the local `.env` over the VPS's, so an edit made only on the VPS is lost on the next deploy. Before it copies anything it compares the two files by hash and prints names only (HOMEINFRA-229). Names the local file adds go through. A name the copy would delete or change stops the deploy, and so does a missing local `.env` when the VPS already has one, because `ensure_env` would mint new keys. `INSTALL_ENV_OVERWRITE=1` is the deliberate override. Tested by `./scripts/install-env-guard.test.sh` (stubbed ssh, no host needed).
