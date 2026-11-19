@@ -97,6 +97,7 @@ run_backup() {
   fi
 
   export RESTIC_PASSWORD_FILE=$PASSWORD_FILE
+  export RESTIC_REPOSITORY
   if [[ -z ${BACKUP_PG_REPOSITORY:-} ]]; then
     export RCLONE_CONFIG_INNGESTGDRIVE_TYPE=drive
     export RCLONE_CONFIG_INNGESTGDRIVE_SCOPE=drive
