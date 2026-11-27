@@ -1,0 +1,22 @@
+name: pr-body
+
+# The org's shared PR check, PracticalWorks/.github's pr-guard.yml (HOMEINFRA-752):
+# a pull request whose body lacks a Verification section or a `Refs:` line fails
+# here. Its own file so it re-runs when the body is edited.
+# `synchronize` keeps a run on every head, so a new push cannot drop the check.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, ready_for_review]
+
+concurrency:
+  group: pr-body-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: PracticalWorks/.github/.github/workflows/pr-guard.yml@v1.3.0
+    permissions:
+      contents: read
+    with:
+      require-verification: true
+      require-refs: true
